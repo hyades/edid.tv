@@ -2,7 +2,6 @@
 # pylint: disable-msg=E1002
 
 import base64
-import re
 
 from django import forms
 from django.conf import settings
@@ -19,6 +18,9 @@ from edid_parser.edid_parser import EDIDParser, EDIDParsingError
 from frontend.models import (EDID, StandardTiming, DetailedTiming, Comment,
                              GrabberRelease)
 from frontend.utils import form_nullify_fields
+from frontend.helpers.EDIDUploadFormCleaner import (
+    EDIDUploadFormCleaner,
+    EDIDUploadFormCleanerException)
 
 
 class EDIDUploadForm(forms.Form):
@@ -55,10 +57,6 @@ class EDIDTextUploadForm(forms.Form):
     text = forms.CharField(widget=forms.Textarea)
     text_type = forms.CharField(widget=forms.HiddenInput)
 
-    _hex_addresses = re.compile(r'0x[0-9A-Fa-f]+')
-    _whitespaces = re.compile(r'\s')
-    _non_hex = re.compile(r'[^0-9A-Fa-f]')
-
     def __init__(self, *args, **kwargs):
         super(EDIDTextUploadForm, self).__init__(*args, **kwargs)
         self.edid_list = []
@@ -81,38 +79,15 @@ class EDIDTextUploadForm(forms.Form):
             raise forms.ValidationError('Please fill the form.')
 
         if text_type == 'hex':
-            # Remove hex addresses, like 0x40
-            text = self._hex_addresses.sub('', text)
+            try:
+                edid = EDIDUploadFormCleaner.clean_hex(text).decode('hex')
+                self.edid_list.append(edid)
+            except EDIDUploadFormCleanerException as err:
+                raise forms.ValidationError(err)
 
-            # Remove spaces, tabs and newlines
-            text = self._whitespaces.sub('', text)
-
-            # Check for non-hex digits
-            if bool(self._non_hex.search(text)):
-                raise forms.ValidationError(
-                    'Please remove all non-hex digits.'
-                )
-
-            # Convert hex to binary and add it to EDIDs list
-            self.edid_list.append(text.decode('hex'))
         elif text_type == 'xrandr':
-            inside_edid = False
-            edid_hex = ''
-
-            # Parse text line-by-line
-            for line in text.splitlines():
-                # If inside edid block
-                if inside_edid:
-                    if line.startswith(u'\t\t'):
-                        edid_hex += line[2:]
-                    # edid block ended
-                    else:
-                        inside_edid = False
-                        # Convert hex to binary and add it to EDIDs list
-                        self.edid_list.append(edid_hex.decode('hex'))
-                # Look for edid block
-                elif line == u'\tEDID:':
-                    inside_edid = True
+            for edid in EDIDUploadFormCleaner.clean_xrandr(text):
+                self.edid_list.append(edid.decode('hex'))
 
         if self.edid_list == []:
             raise forms.ValidationError('No EDID was parsed.')
@@ -650,10 +625,12 @@ class DetailedTimingForm(BaseForm):
         flags_sync_scheme = cleaned_data.get('flags_sync_scheme')
         fields_to_nullify = []
 
-#        analog_composite = (flags_sync_scheme ==
-#                            DetailedTiming.Sync_Scheme.Analog_Composite)
-#        bipolar_analog_composite = (flags_sync_scheme ==
-#                          DetailedTiming.Sync_Scheme.Bipolar_Analog_Composite)
+        # analog_composite = (
+        #     flags_sync_scheme == DetailedTiming.Sync_Scheme.Analog_Composite)
+        # bipolar_analog_composite = (
+        #     flags_sync_scheme ==
+        #     DetailedTiming.Sync_Scheme.Bipolar_Analog_Composite
+        # )
         digital_composite = (flags_sync_scheme ==
                              DetailedTiming.Sync_Scheme.Digital_Composite)
         digital_separate = (flags_sync_scheme ==
